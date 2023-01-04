@@ -1,0 +1,136 @@
+#include <Trade\Trade.mqh>
+#include <MQL5\Indicators\Indicators.mqh>
+#include <MQL5\MQL5.mqh>
+
+// Input parameters
+input double stop_loss_percent = 2.0;
+input double take_profit_percent_1 = 20.0;
+input double take_profit_percent_2 = 50.0;
+input double take_profit_percent_3 = 75.0;
+
+// Trade variables
+double balance, equity, free_margin;
+double stop_loss, take_profit_1, take_profit_2, take_profit_3;
+double trailing_stop_loss, trailing_stop_step;
+
+// Initialize the EA
+int OnInit()
+{
+    // Validate input parameters
+    if (stop_loss_percent <= 0 || take_profit_percent_1 <= 0 || take_profit_percent_2 <= 0 || take_profit_percent_3 <= 0)
+    {
+        Print("Invalid input parameters");
+        return (INIT_FAILED);
+    }
+
+    // Get account balance, equity, and free margin
+    balance = AccountInfoDouble(ACCOUNT_BALANCE);
+    equity = AccountInfoDouble(ACCOUNT_EQUITY);
+    free_margin = AccountInfoDouble(ACCOUNT_FREE_MARGIN);
+
+    return (INIT_SUCCEEDED);
+}
+
+// Clean up when the EA is deinitialized
+void OnDeinit(const int reason)
+{
+}
+
+// Calculate the size of the trade based on the free margin and stop loss
+double CalculateLotSize()
+{
+    double lot_size = free_margin / (stop_loss * MarketInfo(Symbol(), MODE_STOPLEVEL) * MarketInfo(Symbol(), MODE_LOTSIZE));
+    return NormalizeDouble(lot_size, 2);
+}
+
+// Process new ticks
+void OnTick()
+{
+    // Declare variables for signals
+    double macd, ema_crossover, rsi;
+
+    // Calculate indicators
+    macd = iMACD(NULL, 0, 12, 26, 9, PRICE_CLOSE, MODE_MAIN, 0);
+    ema_crossover = iMA(NULL, 0, 5, 0, MODE_EMA, PRICE_CLOSE, 0) - iMA(NULL, 0, 10, 0, MODE_EMA, PRICE_CLOSE, 0);
+    rsi = iRSI(NULL, 0, 14, PRICE_CLOSE, 0);
+
+    // Check for buy signal
+    if (macd > 0 && ema_crossover > 0 && rsi < 30)
+    {
+        // Calculate stop loss and take profit levels
+        stop_loss = NormalizeDouble(Bid - (Bid * stop_loss_percent / 100), Digits);
+        take_profit_1 = NormalizeDouble(Bid + (Bid * take_profit_percent_1 / 100), Digits);
+                take_profit_2 = NormalizeDouble(Bid + (Bid * take_profit_percent_2 / 100), Digits);
+        take_profit_3 = NormalizeDouble(Bid + (Bid * take_profit_percent_3 / 100), Digits);
+
+        // Calculate lot size
+        double lot_size = CalculateLotSize();
+
+        // Place buy trade
+        int ticket = OrderSend(Symbol(), OP_BUY, lot_size, Bid, 3, stop_loss, take_profit_1, NULL, 0, 0, Green);
+        if (ticket < 0)
+        {
+            // Print error message if trade placement fails
+            Print("Error placing buy trade: ", GetLastError());
+        }
+
+        // Set trailing stop loss
+        trailing_stop_loss = stop_loss;
+        trailing_stop_step = (Bid - stop_loss) / 3;
+    }
+
+    // Check for sell signal
+    if (macd < 0 && ema_crossover < 0 && rsi > 70)
+    {
+        // Calculate stop loss and take profit levels
+        stop_loss = NormalizeDouble(Ask + (Ask * stop_loss_percent / 100), Digits);
+        take_profit_1 = NormalizeDouble(Ask - (Ask * take_profit_percent_1 / 100), Digits);
+        take_profit_2 = NormalizeDouble(Ask - (Ask * take_profit_percent_2 / 100), Digits);
+        take_profit_3 = NormalizeDouble(Ask - (Ask * take_profit_percent_3 / 100), Digits);
+
+        // Calculate lot size
+        double lot_size = CalculateLotSize();
+
+        // Place sell trade
+        int ticket = OrderSend(Symbol(), OP_SELL, lot_size, Ask, 3, stop_loss, take_profit_1, NULL, 0, 0, Red);
+        if (ticket < 0)
+        {
+            // Print error message if trade placement fails
+            Print("Error placing sell trade: ", GetLastError());
+        }
+
+        // Set trailing stop loss
+                trailing_stop_loss = stop_loss;
+        trailing_stop_step = (stop_loss - Ask) / 3;
+    }
+
+    // Update trailing stop loss
+    if (trailing_stop_loss > 0)
+    {
+        double current_profit = OrderProfit() / AccountInfoDouble(ACCOUNT_CURRENCY_PROFIT);
+        if (current_profit > trailing_stop_step)
+        {
+            bool result = OrderModify(OrderTicket(), OrderOpenPrice(), NormalizeDouble(trailing_stop_loss, Digits), OrderTakeProfit(), 0, Blue);
+            if (!result)
+            {
+                // Print error message if modification fails
+                Print("Error modifying order: ", GetLastError());
+            }
+
+            trailing_stop_loss += trailing_stop_step;
+        }
+        else if (current_profit < 0)
+        {
+            bool result = OrderClose(OrderTicket(), OrderLots(), OrderClosePrice(), 3, Violet);
+            if (!result)
+            {
+                // Print error message if close fails
+                Print("Error closing order: ", GetLastError());
+            }
+
+            trailing_stop_loss = 0;
+        }
+    }
+}
+
+
